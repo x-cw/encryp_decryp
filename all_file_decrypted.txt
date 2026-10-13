@@ -1,0 +1,951 @@
+========================================
+merged_file:gen_upf.tcl
+========================================
+echo "------------------`ls /home/Storage_Plugins/Frontend/xucw/GP3/GPUcore/01.Documents/GP3/02.Tech/04.Design/01.Spec/SOC/lowpower/low_power_parameters* | tail -n 1`----------------------------"
+/usr/bin/python3 ./gen_upf.py `ls /home/Storage_Plugins/Frontend/xucw/GP3/GPUcore/01.Documents/GP3/02.Tech/04.Design/01.Spec/SOC/lowpower/low_power_parameters* | tail -n 1`
+
+
+========================================
+merged_file:gen_upf.py
+========================================
+#!/usr/bin/python
+# -*- coding: UTF-8 -*-
+
+import re
+import numpy as np
+import xlrd
+from ivlconst import *
+from collections import OrderedDict
+#from datetime import datetime
+import copy
+
+
+def search_in_sheet(sheet, startrow = 0, startcol = 0, key = 'offset_addr') :
+    row = startrow
+    col = startcol
+    flag = 0
+    rownum = 0
+    colnum = 0
+   # print(sheet.ncols)
+   # print(sheet.nrows)
+    #debug
+    #print ('DEBUG Info: nrows,ncols = ', sheet.nrows, sheet.ncols) 
+    for row in range(startrow, sheet.nrows) :
+        for col in range(startcol, sheet.ncols) :
+            if ((sheet.cell_type(row, col) == 1) and (key in sheet.cell(row, col).value)) :
+                rownum = row
+                colnum = col
+                flag = 1
+                break
+        else : #if go through all columns, continue on next row.
+            continue
+        break        
+    else : #go through all rows, can't find the expected string.
+        flag = 0 
+        rownum = startrow
+        colnum = startcol        
+    return flag, rownum, colnum 
+
+def has_duplicates(lst):
+    return len(lst) != len(set(lst))
+
+def power_domain_func(sheet):
+    #####################power domain start
+    power_domain_list = []
+    element_list = []
+    supply_set_list = []
+    isolation_supply_list = []
+    power_state_list = []
+    power_domain_block = ''
+    flag,row_init,col_init = search_in_sheet(sheet,0,0,'power-domain')
+    if(flag) :
+        row_last = sheet.nrows
+        col_last = sheet.ncols
+        for row in range(row_init+1,row_last) :
+            power_domain_list.append(sheet.cell(row,col_init).value.strip())
+            element_list.append(sheet.cell(row,col_init+1).value.strip())
+            supply_set_list.append(sheet.cell(row,col_init+2).value.strip())
+            isolation_supply_list.append(sheet.cell(row,col_init+3).value.strip())
+            power_state_list.append(sheet.cell(row,col_init+4).value.strip())
+
+        #2)supply set
+        power_domain_block = power_domain_block + SUPPLY_SET_HEAD
+       # print (supply_set_list)
+      #  print ("#############")
+        #delet duplicate list
+        
+        clean_supply_set_list = list(OrderedDict.fromkeys(supply_set_list))
+        #print (clean_supply_set_list)
+        #create_supply_set
+        for num in range(len(clean_supply_set_list)) :            
+            clean_supply_set_list[num]=clean_supply_set_list[num].split('(',1)[0].strip()
+        #print(clean_supply_set_list)
+        for num in range(len(clean_supply_set_list)) :            
+            power_domain_block = power_domain_block + SUPPLY_SETS %(clean_supply_set_list[num]) 
+
+
+        #clean voltage
+        for num in range(len(supply_set_list)) :            
+            supply_set_list[num]=supply_set_list[num].split('(',1)[0].strip()
+            isolation_supply_list[num]=isolation_supply_list[num].split('(',1)[0].strip()
+        print(supply_set_list)
+        print(isolation_supply_list)
+
+
+        #############new gp3#########
+        ###delete duplicate PD_MAIN
+        if(power_domain_list[0] != 'PD_MAIN'):
+            print("please put the <PD_MAIN> in front of others power domain in <pd_domain> sheet")
+        else :
+            for num in range(len(power_domain_list)-1,0,-1):
+                if(power_domain_list[num] == 'PD_MAIN'):
+                    del power_domain_list[num]
+                    del element_list[num]
+                    del supply_set_list[num]
+                    del isolation_supply_list[num]
+                    del power_state_list[num]
+        ##delete others duplicate PD
+     #   if(has_duplicates(power_domain_list)):
+     #       duplicates = list(set([x for x in power_domain_list if power_domain_list.count(x) > 1]))
+            
+        
+        #############new gp3 end#########
+
+        #3)power domain
+        power_domain_block = power_domain_block + POWER_DOMAIN_HEAD
+        print()
+        if(has_duplicates(power_domain_list)):
+            print("duplicate power domain , please check your excel in <pd_domain> sheet")
+   #     elif('PD_MAIN' not in power_domain_list):
+   #         print("not included PD_MAIN, please check your excel in <pd_domain> sheet")
+   #     elif(power_domain_list[0] != 'PD_MAIN'):
+   #         print("please put the <PD_MAIN> in front of others power domain in <pd_domain> sheet")
+        #crate power domain
+        else :            
+            power_domain_block = power_domain_block + POWERDOMAINS_INCLUDE_SCOPE %(power_domain_list[0],\
+                                                                        supply_set_list[0],\
+                                                                        isolation_supply_list[0])                                                
+            always_on_supply_set = supply_set_list[0]           
+            for num in range(1,len(power_domain_list)) :
+                if((power_domain_block[num] != 'PD_MAIN') and (supply_set_list[num] == always_on_supply_set)):
+                    power_domain_block = power_domain_block + POWERDOMAINS_NOC %(power_domain_list[num],\
+                                                            element_list[num],\
+                                                            supply_set_list[num],\
+                                                            isolation_supply_list[num])
+                else:
+                    power_domain_block = power_domain_block + POWERDOMAINS_IP %(power_domain_list[num],\
+                                                            element_list[num],\
+                                                            supply_set_list[num])
+        
+        #4)redefine supply set
+        power_domain_block = power_domain_block + REFILE_SUPPLY_SET_HEAD
+        power_domain_block = power_domain_block + CONNECT_SUPPLY_PORT_VSS
+        #connect_supply_net
+        for num in range(len(clean_supply_set_list)):
+            VDD_NAME = 'VDD_'+clean_supply_set_list[num].split('_',1)[1].strip()
+            redefine_supply_set_block =  CONNECT_SUPPLY_PORT_AND_NET %(VDD_NAME,VDD_NAME,VDD_NAME,VDD_NAME)
+            power_domain_block = power_domain_block + redefine_supply_set_block
+
+        #create_supply_set -update power on
+        for num in range(len(clean_supply_set_list)):
+            VDD_NAME = 'VDD_'+clean_supply_set_list[num].split('_',1)[1].strip()
+            SS_NAME = 'SS_'+clean_supply_set_list[num].split('_',1)[1].strip()
+            redefine_supply_set_block = REFILE_SUPPLY_SET %(SS_NAME,VDD_NAME)
+            power_domain_block = power_domain_block + redefine_supply_set_block
+
+        #create_supply_set -update power ground
+        for num in range(len(clean_supply_set_list)):
+            SS_NAME = 'SS_'+clean_supply_set_list[num].split('_',1)[1].strip()
+            redefine_supply_set_block = REFILE_SUPPLY_SET_VSS %(SS_NAME)
+            power_domain_block = power_domain_block + redefine_supply_set_block
+    else :
+        print("not found <power-domain> in <pd_domain> sheet ,please check your excel")
+    return power_domain_block,element_list[0] 
+
+
+def power_state_func(sheet):
+    supply_set_list = []
+    power_state_list = []
+    supply_power_list = []
+    supply_ground_list = []
+    power_state_block = ''
+    flag_sec,row_sec,col_sec = search_in_sheet(sheet,0,0,'supply-set')
+    flag_init,row_init,col_init = search_in_sheet(sheet,0,0,'power-state-group')
+    row_last = sheet.nrows
+    col_last = sheet.ncols
+    matrix = [[''] * (col_last-col_init) for _ in range(row_sec-row_init)]
+    if(flag_sec and flag_init) :
+        for row in range(row_sec+1,row_last):
+            supply_set_list.append(sheet.cell(row,col_sec).value.strip())
+            power_state_list.append(sheet.cell(row,col_sec+1).value.strip())
+            supply_power_list.append(sheet.cell(row,col_sec+2).value.strip())
+            supply_ground_list.append(sheet.cell(row,col_sec+3).value.strip())
+        supply_set_list = list(filter(None,supply_set_list))
+        power_state_list = list(filter(None,power_state_list))
+        supply_power_list = list(filter(None,supply_power_list))
+        supply_ground_list = list(filter(None,supply_ground_list))
+        for row in range(row_init,row_sec):
+            for col in range(col_init,col_last):
+                matrix[row-row_init][col-col_init] = sheet.cell(row,col).value.strip()
+        matrix_power_state_group = [sublist for sublist in matrix if any(item != '' for item in sublist)]
+        col_len = len(matrix_power_state_group[0])
+        row_len = len(matrix_power_state_group)
+        check_spare_matrix = True
+        for row in range(1,row_len):            
+            if(len(list(filter(None,matrix_power_state_group[row-1]))) != len(list(filter(None,matrix_power_state_group[row])))):
+                check_spare_matrix = False
+                break
+        check_spare_list = (len(supply_set_list) == len(power_state_list)) and (len(supply_power_list) == len(supply_ground_list)) and (len(supply_power_list) == len(power_state_list))
+        if((check_spare_list != True) or (check_spare_matrix != True)) :
+            print("found empty value in <new_pst> sheet, <supply-set> , please fill in")
+        else :
+           #begin power_state table add
+            power_state_block = power_state_block + POWER_STATE_TABLE_HEAD
+            create_pst = ''
+            for i in range(len(supply_power_list)):
+                if('FULL_ON' in supply_power_list[i]):
+                    #empty voltage
+                    if(re.findall(r'\d+\.\d+',supply_power_list[i]) == []):
+                        print("not found voltage value in <new_pst> sheet <"+supply_set_list[i]+", <supply-power>>, you should add voltage value like that: <FULL_ON 0.75v>")
+                    else:
+                        power_state_block = power_state_block + ADD_POWER_STATE_ON %(supply_set_list[i],supply_set_list[i].split('_',1)[1].strip(),re.findall(r'\d+\.\d+',supply_power_list[i])[0])
+                elif('OFF' in supply_power_list[i]):
+                    power_state_block = power_state_block + ADD_POWER_STATE_OFF %(supply_set_list[i],supply_set_list[i].split('_',1)[1].strip())
+                else :
+                    print("not found <FULL_ON or OFF> in <new_pst> sheet, the location is col: <supply-power>, row:" + supply_set_list[i])
+
+            power_state_block = power_state_block + ADD_POWER_STATE_GROUND
+
+            temp_power_state_list = [''] * (row_len) 
+            for num in range(1,len(matrix_power_state_group[0])):
+                create_pst = create_pst+ matrix_power_state_group[0][num]+'.power'+' '
+            power_state_block = power_state_block + CREATE_PST %('GRP_SOC_PST',create_pst)
+            for row in range(1,row_len):
+                for col in range(1,col_len):
+                    temp_power_state_list[row] = temp_power_state_list[row] + ' ' + matrix_power_state_group[0][col].split('_',1)[1].strip() + '_' + matrix_power_state_group[row][col]
+                power_state_block = power_state_block + ADD_PST_STATE %(matrix_power_state_group[row][0],'GRP_SOC_PST',temp_power_state_list[row].strip())
+    else :
+        print("not found <supply-set> or <power-state-group> in <new_pst> sheet,please check your excel")
+
+    return power_state_block
+
+
+
+def iso_cell_func(cell_sheet,signal_sheet):
+    iso_cell_block = ''
+    row_last_signal = signal_sheet.nrows
+    col_last_signal = signal_sheet.ncols
+    col_last_cell = cell_sheet.ncols
+    row_last_cell = cell_sheet.nrows
+    dont_iso_ports_list = []
+    iso_domain_list = []
+    iso_strategy_name_list = []
+    iso_source_list = []
+    iso_sink_list = []
+    iso_ctrl_signal_list = []
+    iso_cell_list = []
+    iso_location_list = []
+    iso_sense_list = []
+
+    ls_domain_list = []
+    ls_strategy_name_list = []
+    ls_source_list = []
+    ls_apply_to_list = []
+    ls_cell_list = []
+    flag_iso,row_iso,col_iso = search_in_sheet(cell_sheet,0,0,'isolation-domain')
+    flag_ls,row_ls,col_ls = search_in_sheet(cell_sheet,0,0,'level_shifter_domain')
+    if(flag_iso and flag_ls):
+        #add excel value to list , iso about
+        for row in range(row_iso+1,row_ls):
+            iso_domain_list.append(cell_sheet.cell(row,col_iso).value.strip())
+            iso_strategy_name_list.append(cell_sheet.cell(row,col_iso+1).value.strip())
+            iso_source_list.append(cell_sheet.cell(row,col_iso+2).value.strip())
+            iso_sink_list.append(cell_sheet.cell(row,col_iso+3).value.strip())
+            iso_ctrl_signal_list.append(cell_sheet.cell(row,col_iso+4).value.strip())
+            iso_cell_list.append(cell_sheet.cell(row,col_iso+5).value.strip())
+            iso_location_list.append(cell_sheet.cell(row,col_iso+6).value.strip())
+            iso_sense_list.append(cell_sheet.cell(row,col_iso+7).value.strip())
+        # filter 'spare' in list
+        iso_domain_list = list(filter(None,iso_domain_list))
+        iso_strategy_name_list = list(filter(None,iso_strategy_name_list))
+        iso_source_list = list(filter(None,iso_source_list))
+        iso_sink_list= list(filter(None,iso_sink_list))
+        iso_ctrl_signal_list=list(filter(None,iso_ctrl_signal_list))
+        iso_cell_list= list(filter(None,iso_cell_list))
+        iso_location_list= list(filter(None,iso_location_list))
+        iso_sense_list= list(filter(None,iso_sense_list))
+        length_iso = len(iso_domain_list)
+        #check 'spare' in list
+        check_iso_spare = (length_iso == len(iso_strategy_name_list)) and (length_iso == len(iso_source_list)) and (length_iso == len(iso_sink_list)) and (length_iso == len(iso_ctrl_signal_list)) and (length_iso == len(iso_cell_list)) and (length_iso == len(iso_location_list)) and (length_iso == len(iso_sense_list))
+      #  print(check_iso_spare)
+      #  print(length_iso)
+      #  print(iso_strategy_name_list)
+      #  print(iso_source_list)
+      #  print(iso_sink_list)
+      #  print(iso_ctrl_signal_list)
+      #  print(iso_cell_list)
+      #  print(iso_location_list)
+      #  print(iso_sense_list)
+
+        #add excel valut to list ,level shift about
+        for row in range(row_ls+1,row_last_cell):
+            ls_domain_list.append(cell_sheet.cell(row,col_ls).value.strip())
+            ls_strategy_name_list.append(cell_sheet.cell(row,col_ls+1).value.strip())
+            ls_source_list.append(cell_sheet.cell(row,col_ls+2).value.strip())
+            ls_apply_to_list.append(cell_sheet.cell(row,col_ls+3).value.strip())
+            ls_cell_list.append(cell_sheet.cell(row,col_ls+4).value.strip())
+        # filter 'spare' in list
+        ls_domain_list = list(filter(None,ls_domain_list))
+        ls_strategy_name_list = list(filter(None,ls_strategy_name_list))
+        ls_source_list = list(filter(None,ls_source_list))
+        ls_apply_to_list= list(filter(None,ls_apply_to_list))
+        ls_cell_list= list(filter(None,ls_cell_list))
+        length_ls = len(ls_domain_list)
+        check_ls_spare = (length_ls == len(ls_strategy_name_list)) and (length_ls == len(ls_source_list)) and (length_ls == len(ls_apply_to_list)) and (length_ls == len(ls_cell_list))
+        #check 'spare' in list
+       # print(check_ls_spare)
+        if((check_ls_spare != True) or (check_iso_spare != True)) :
+            print("found empty value in <cell_strategy> sheet, please fill in")
+        else :
+            ############################################################################begin iso cell add
+            iso_cell_block = iso_cell_block + PORT_LIST_HEAD 
+            for row in range (row_last_signal):
+                for col in range (col_last_signal):
+                    iso_cell_block = iso_cell_block + signal_sheet.cell(row,col).value.strip()
+                    iso_cell_block = iso_cell_block + '\n'
+            iso_cell_block = iso_cell_block + ISOLATION_CONFIG_HEAD
+            #1)search dont_iso_ports
+            if('DONT_ISO_PORT_' in iso_cell_block):
+                print("found wrong formal in <signal_list> sheet, please replace <DONT_ISO_PORT_*> to <*_DONT_ISO_PORT>")
+            elif('DONT_ISO_PORT' in iso_cell_block):
+                dont_iso_ports_list = re.findall(r'[^#]set.*DONT_ISO_PORT',iso_cell_block)
+                for num in range(len(dont_iso_ports_list)):
+                    power_name_temp = dont_iso_ports_list[num].split('_DONT_ISO_PORT',1)[0].split('set',1)[1].strip()
+                    iso_cell_block =  iso_cell_block + SET_DONT_ISO_PORT %(power_name_temp,power_name_temp,power_name_temp,dont_iso_ports_list[num].split('set',1)[1].strip())
+
+
+
+
+
+            #2)iso cell config
+#            for num in range(len(iso_strategy_name_list)):
+#                if('OUT_HIGH' in iso_strategy_name_list[num] and ('ISO_PD' in iso_strategy_name_list[num])):
+#                    iso_cell_block = iso_cell_block + SET_ISOLATION_CONFIG_HIGH %(iso_strategy_name_list[num],iso_domain_list[num],iso_source_list[num],iso_sink_list[num],iso_strategy_name_list[num],iso_strategy_name_list[num].split('ISO_PD_',1)[1].split('_OUT_',2)[0].strip())
+#                    iso_cell_block = iso_cell_block + SET_ISOLATION_CONTROL %(iso_strategy_name_list[num],iso_domain_list[num],iso_sense_list[num],iso_ctrl_signal_list[num],iso_location_list[num])
+#                elif('OUT_LOW' in iso_strategy_name_list[num] and ('ISO_PD' in iso_strategy_name_list[num])):
+#                    iso_cell_block = iso_cell_block + '\n#isolation ' + iso_source_list[num]
+#                    if('self' in iso_location_list):
+#                        iso_cell_block = iso_cell_block + SET_ISOLATION_CONFIG_LOW %(iso_strategy_name_list[num],iso_domain_list[num],iso_source_list[num],iso_sink_list[num],iso_strategy_name_list[num],iso_strategy_name_list[num].split('ISO_PD_',1)[1].split('_OUT_',2)[0].strip(),'inputs')
+#                        iso_cell_block = iso_cell_block + SET_ISOLATION_CONTROL %(iso_strategy_name_list[num],iso_domain_list[num],iso_sense_list[num],iso_ctrl_signal_list[num],iso_location_list[num])
+#                    else :
+#                        iso_cell_block = iso_cell_block + SET_ISOLATION_CONFIG_LOW %(iso_strategy_name_list[num],iso_domain_list[num],iso_source_list[num],iso_sink_list[num],iso_strategy_name_list[num],iso_source_list[num].split('SS_',1)[1].strip(),'outputs')
+#                        iso_cell_block = iso_cell_block + SET_ISOLATION_CONTROL %(iso_strategy_name_list[num],iso_domain_list[num],iso_sense_list[num],iso_ctrl_signal_list[num],iso_location_list[num])
+#                        print("isolation config <-location> is not <self>, please double check your upf, if needed, please modify python tcl:gen_upf.py")
+#                else :
+#                    print("found wrong formal in <cell_strategy> sheet, please add <ISO_PD_*_OUT_lOW or ISO_PD_*_OUT_HOGH > to <strategy_name> in iso config, such as <ISO_PD_VENC0_OUT_HIGH>")
+            
+
+
+            for num in range(len(iso_strategy_name_list)):
+                if('HIGH' in iso_strategy_name_list[num] and ('ISO_PD' in iso_strategy_name_list[num])):
+                    iso_cell_block = iso_cell_block + SET_ISOLATION_CONFIG_HIGH %(iso_strategy_name_list[num],iso_domain_list[num],iso_source_list[num],iso_sink_list[num],iso_strategy_name_list[num],iso_strategy_name_list[num].split('ISO_PD_',1)[1].split('_HIGH',1)[0].strip())
+                    iso_cell_block = iso_cell_block + SET_ISOLATION_CONTROL %(iso_strategy_name_list[num],iso_domain_list[num],iso_sense_list[num],iso_ctrl_signal_list[num],iso_location_list[num])
+                elif('LOW' in iso_strategy_name_list[num] and ('ISO_PD' in iso_strategy_name_list[num])):
+                    iso_cell_block = iso_cell_block + '\n#isolation ' + iso_source_list[num]
+                    if('self' in iso_location_list):
+                        iso_cell_block = iso_cell_block + SET_ISOLATION_CONFIG_LOW %(iso_strategy_name_list[num],iso_domain_list[num],iso_source_list[num],iso_sink_list[num],iso_strategy_name_list[num],iso_strategy_name_list[num].split('ISO_PD_',1)[1].split('_LOW',1)[0].strip(),'inputs')
+                        iso_cell_block = iso_cell_block + SET_ISOLATION_CONTROL %(iso_strategy_name_list[num],iso_domain_list[num],iso_sense_list[num],iso_ctrl_signal_list[num],iso_location_list[num])
+                    else :
+                        iso_cell_block = iso_cell_block + SET_ISOLATION_CONFIG_LOW %(iso_strategy_name_list[num],iso_domain_list[num],iso_source_list[num],iso_sink_list[num],iso_strategy_name_list[num],iso_source_list[num].split('SS_',1)[1].strip(),'outputs')
+                        iso_cell_block = iso_cell_block + SET_ISOLATION_CONTROL %(iso_strategy_name_list[num],iso_domain_list[num],iso_sense_list[num],iso_ctrl_signal_list[num],iso_location_list[num])
+                        print("isolation config <-location> is not <self>, please double check your upf, if needed, please modify python tcl:gen_upf.py")
+                else :
+                    print("found wrong formal in <cell_strategy> sheet, please add <ISO_PD_*_OUT_lOW or ISO_PD_*_OUT_HOGH > to <strategy_name> in iso config, such as <ISO_PD_VENC0_OUT_HIGH>")
+            
+
+
+
+
+
+            #3)level shift config
+            iso_cell_block = iso_cell_block + LEVEL_SHIFT_CONFIG_HEAD
+            for num in range(len(ls_domain_list)):
+                if("_H2L" in ls_strategy_name_list[num]):
+                    iso_cell_block = iso_cell_block + SET_LEVEL_SHIFT %(ls_strategy_name_list[num],ls_domain_list[num],ls_source_list[num],ls_apply_to_list[num],'high_to_low',ls_strategy_name_list[num],ls_source_list[num])
+                elif("_L2H" in ls_strategy_name_list[num]):
+                    iso_cell_block = iso_cell_block + SET_LEVEL_SHIFT %(ls_strategy_name_list[num],ls_domain_list[num],ls_source_list[num],ls_apply_to_list[num],'low_to_high',ls_strategy_name_list[num],ls_source_list[num])
+                else :
+                    print("found wrong formal in <cell_strategy> sheet, please add <_H2L or _L2H> to <strategy_name> in level shift config, such as <LS_BTM_MID0_TO_PCIE_L2H>")
+            
+
+
+            #4) map cell
+            iso_cell_block = iso_cell_block + MAP_CELL_HEAD
+            for num in range(len(iso_domain_list)):
+                iso_cell_block = iso_cell_block + MAP_ISOLATION_CELL %(iso_strategy_name_list[num],iso_domain_list[num],iso_cell_list[num])
+            for num in range(len(ls_domain_list)):      
+                iso_cell_block = iso_cell_block + MAP_LEVEL_SHIFT_CELL %(ls_strategy_name_list[num],ls_domain_list[num],ls_cell_list[num])
+
+
+    else:
+        print("not found <isolation-domain> or <level_shifter_domain> in <cell_strategy> sheet,please check your excel")
+    return iso_cell_block
+
+
+if __name__ == '__main__' :
+
+    import argparse   
+    
+    parser = argparse.ArgumentParser(description='Translate excel to G3_TOP.upf Usage: gen_upf.py [excel] [option]')    
+    parser.add_argument('excel',  help="excel file to be parsed")
+    args = parser.parse_args()
+           
+    excel_file = args.excel  
+    data = xlrd.open_workbook(excel_file)
+    pd_domain = data.sheet_by_index(0)
+    new_pst = data.sheet_by_index(1)
+    cell_strategy = data.sheet_by_index(2)
+    signal_list = data.sheet_by_index(3)
+    POWER_DOMAIN_BLOCK,module_name = power_domain_func(pd_domain)
+    POWER_STATE_BLOCK = power_state_func(new_pst)
+    ISO_CELL_BLOCK = iso_cell_func(cell_strategy,signal_list)
+
+    
+
+    
+
+    #-------------------upf start-------------------------
+    upffile = open(module_name+'.upf','w',encoding='utf-8')
+    upffile.write(HEADER_STRING)
+    upffile.write(POWER_DOMAIN_BLOCK)
+    upffile.write(POWER_STATE_BLOCK)
+    upffile.write(ISO_CELL_BLOCK)
+    print(f"output upf file : {module_name}.upf ")
+
+
+
+
+
+
+========================================
+merged_file:ivlconst.py
+========================================
+
+__DESCRIPTION__ = '''
+=====================================
+# IVL - Improved VerilogHDL Language #
+=====================================
+//                                                                          
+//  reg_table_parse.py - python code for parsing excel table.                              
+//                                      
+//                                                                          
+//  This library is free software; you can redistribute it and/or           
+//  modify it under the terms of the GNU Lesser General Public              
+//  License as published by the Free Software Foundation; either            
+//  version 2.1 of the License, or (at your option) any later version.      
+//                                                                          
+//  This library is distributed in the hope that it will be useful,         
+//  but WITHOUT ANY WARRANTY; without even the implied warranty of          
+//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU       
+//  Lesser General Public License for more details.                         
+//                                                                          
+//  Full details of the license can be found in the file LGPL.TXT.          
+//                                                                          
+//  You should have received a copy of the GNU Lesser General Public        
+//  License along with this library; if not, write to the Free Software     
+//  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA 
+//                                                                          
+'''
+
+
+
+#========================================
+# UPF version declaration
+#========================================
+INDENT_SP = ' '*4
+
+HEADER_STRING = '''\
+
+# UPF DIRECTORY
+#set UPF_DIR /home/Users/huangyh/Desktop/huangyh/workdir/G3_PRJ/SVN_G3_PRJ_202203/frontend/vc_static_check/upf
+
+# USE UPF 2.1 
+set_design_attributes -elements {.} -attribute enable_state_propagation_in_add_power_state true
+
+'''
+
+#========================================
+# power domain block
+#========================================
+SUPPLY_SET_HEAD = '''\
+##################################################################################
+# SUPPLY SETS (EXPLICIT)
+##################################################################################
+
+'''
+
+SUPPLY_SETS = '''\
+ create_supply_set %s            
+'''
+
+POWER_DOMAIN_HEAD = '''\
+
+##################################################################################
+# POWER DOMAINS
+###################################################################################
+'''
+
+POWERDOMAINS_INCLUDE_SCOPE = '''\
+
+create_power_domain %s -supply {primary %s} -supply {default_isolation %s} -include_scope    
+
+'''
+
+POWERDOMAINS_NOC = '''\
+
+create_power_domain %s -elements {%s} -supply {primary %s} -supply {default_isolation %s}  
+
+'''
+
+POWERDOMAINS_IP = '''\
+
+create_power_domain %s -elements {%s} -supply {primary %s}    
+
+'''
+
+
+#========================================
+# REFILE supply set
+#========================================
+
+REFILE_SUPPLY_SET_HEAD = '''\
+#########################################
+#refine supply-set
+#########################################
+
+'''
+
+CONNECT_SUPPLY_PORT_AND_NET = '''\
+create_supply_port %s
+create_supply_net %s
+connect_supply_net -ports %s %s
+
+'''
+
+CONNECT_SUPPLY_PORT_VSS = '''\
+create_supply_port VSS
+create_supply_net VSS
+connect_supply_net -ports VSS VSS
+
+'''
+
+REFILE_SUPPLY_SET = '''\
+create_supply_set %s -function {power %s} -update
+
+'''
+
+REFILE_SUPPLY_SET_VSS = '''\
+create_supply_set %s -function {ground VSS} -update
+
+'''
+
+#========================================
+# power state table
+#========================================
+
+
+POWER_STATE_TABLE_HEAD = '''\
+#####################################################################################
+# POWER STATE TABLE (UPF 2.1)
+#####################################################################################
+
+
+'''
+
+ADD_POWER_STATE_ON = '''\
+add_power_state  %s -state %s_ON {-supply_expr {power == {FULL_ON %s} }}
+
+'''
+
+ADD_POWER_STATE_OFF = '''\
+add_power_state  %s -state %s_OFF {-supply_expr {power == {OFF}} -simstate CORRUPT}
+
+'''
+
+ADD_POWER_STATE_GROUND = '''\
+add_power_state  SS_MAIN 	    -state GND              {-supply_expr {ground == {FULL_ON 0.0} }}
+
+'''
+
+
+CREATE_PST = '''\
+create_pst %s -supplies {%sSS_MAIN.ground}
+
+'''
+
+ADD_PST_STATE = '''\
+add_pst_state %s -pst %s -state {%s GND}
+
+'''
+
+#========================================
+# isolation config table
+#========================================
+
+PORT_LIST_HEAD = '''
+#####################################################################################################
+#PORTS LIST
+#####################################################################################################
+
+'''
+ISOLATION_CONFIG_HEAD = '''
+#####################################################################################################
+#ISOLATION  CONFIG
+#####################################################################################################
+
+'''
+SET_DONT_ISO_PORT = '''
+set_isolation ISO_PD_%s_DONT_ISO -domain PD_%s -source SS_%s -elements $%s -no_isolation
+
+'''
+
+SET_ISOLATION_CONFIG_HIGH = '''
+set_isolation %s -domain %s -source %s -isolation_supply_set %s -clamp_value 1 -name_suffix %s \
+    -elements $%s_ISO_HIGH_PORT 
+
+'''
+SET_ISOLATION_CONFIG_LOW = '''
+set_isolation %s -domain %s -source %s -isolation_supply_set %s -clamp_value 0 -name_suffix %s \
+    -exclude_elements $%s_ISO_HIGH_PORT -applies_to %s
+
+'''
+
+
+
+
+SET_ISOLATION_CONTROL = '''
+set_isolation_control %s -domain %s -isolation_sense %s -isolation_signal %s -location %s
+
+'''
+
+LEVEL_SHIFT_CONFIG_HEAD = '''
+###################################
+#LEVEL-SHIFTER  CONFIG
+###################################
+
+'''
+
+SET_LEVEL_SHIFT = '''
+set_level_shifter %s -domain %s -source %s -applies_to %s -rule %s -location self \
+-name_suffix %s -input_supply %s
+
+'''
+
+
+MAP_CELL_HEAD = '''
+#############################
+#       map_cell
+#############################
+
+'''
+
+MAP_ISOLATION_CELL = '''
+map_isolation_cell %s -domain %s -lib_cells {%s}
+
+'''
+
+MAP_LEVEL_SHIFT_CELL = '''
+map_level_shifter_cell %s -domain %s -lib_cells {%s}
+'''
+
+
+========================================
+merged_file:process_upf
+========================================
+#!/usr/bin/csh
+set top_upf = "GP3A_TOP"
+
+#mid_top_wrap \
+#up_top_wrap \
+#bottom_top_wrap \
+#left_top \
+#right_top \
+
+set sub_upf_list = "\
+mid_top_wrap \
+up_top_wrap \
+bottom_top_wrap \
+left_top \
+right_top \
+"
+#set sub_upf = "gp3_right"
+
+
+sed -i "s/-exclude_elements .*NOC_UP.*_UALINKIN_ISO_HIGH_PORT//" $top_upf.upf
+sed -i "/NOC_UP.*_UALINKIN_ISO_HIGH_PORT/d" $top_upf.upf
+sed -i "/NOC_UP.*_UALINKIN_HIGH/d" $top_upf.upf
+
+
+foreach sub_upf ($sub_upf_list)
+if ( $sub_upf != "" ) then  
+  cat $top_upf.upf > $sub_upf.upf
+  sed -i "s/\#set_level_shifter HB/set_level_shifter HB/" $sub_upf.upf
+
+
+
+  if ( $sub_upf == "up_top_wrap" ) then
+
+    sed -i '/^\s*set .*GPC.*\"/,/^\s*\"/d' $sub_upf.upf  
+    sed -i '/^\s*set .*DDR.*\"/,/^\s*\"/d' $sub_upf.upf  
+    sed -i '/^\s*set .*RDMA.*\"/,/^\s*\"/d' $sub_upf.upf
+    sed -i '/^\s*set .*PCIE.*\"/,/^\s*\"/d' $sub_upf.upf
+    #sed -i '/^\s*set .*UALINK.*\"/,/^\s*\"/d' $sub_upf.upf
+
+    sed -i "/PDOWN_GPC/Id" $sub_upf.upf    
+    sed -i "/PDOWN_PCIE/Id" $sub_upf.upf    
+    sed -i "/PDOWN_RDMA/Id" $sub_upf.upf    
+    sed -i '/TVS/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/VPU/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/PCIE/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/RDMA/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/GPC/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/DDR/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/LEFT/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/RIGHT/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    #sed -i '/CLK_BUF/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+      
+
+    sed -i "s/[A-Za-z0-9_]*TVS[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*VPU[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*PCIE[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*RDMA[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*GPC[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*DDR[A-Za-z0-9_.]*//g" $sub_upf.upf
+    #sed -i "s/[A-Za-z0-9_]*CLK_BUF[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "/middle_matrix/Id" $sub_upf.upf
+    sed -i "/bottom/Id" $sub_upf.upf
+    sed -i '/^\s*$/d' $sub_upf.upf
+
+    sed -i "s/u_up_top_wrap\///" $sub_upf.upf
+    sed -i "s/add_power_state\s*-supply/add_power_state /" $sub_upf.upf
+
+    echo "" >> $sub_upf.upf
+    echo "" >> $sub_upf.upf
+    echo 'set up0_to_mid_ports [find_objects noc_up_wrap_inst0 -regexp -pattern ".*_mid_to_up\|.*up_to_mid\|dp_Link.*\|svc_Link.*\|obs_.*\|.*_ijtag_to_.*\|.*_bscan_to.*\|.*_bisr_to_.*\|.*_ssn_to_bus.*" -object_type port ]' >> $sub_upf.upf
+    echo 'set up1_to_mid_ports [find_objects noc_up_wrap_inst1 -regexp -pattern ".*_mid_to_up\|.*up_to_mid\|dp_Link.*\|svc_Link.*\|obs_.*\|.*_ijtag_to_.*\|.*_bscan_to.*\|.*_bisr_to_.*\|.*_ssn_to_bus.*" -object_type port ]' >> $sub_upf.upf
+    echo 'set_level_shifter LS_NOCUP0_TOP_DONT_LS -domain PD_NOC_UP0 -elements $up0_to_mid_ports -no_shift' >> $sub_upf.upf
+    echo 'set_level_shifter LS_NOCUP1_TOP_DONT_LS -domain PD_NOC_UP1 -elements $up1_to_mid_ports -no_shift' >> $sub_upf.upf
+
+    echo 'set up_to_right_ports [find_objects . -regexp -pattern ".*from_noc_bottom.*\|.*up_to_right\|right_dft_test_.*\|reg_ddr\[5-9\]_scp_to_ddr_reg.*\|.*right_side_left_right_glue\|.*ddr\[5-9\]_.*_left_right_glue.*\|dft_test_clk_ddr_right_100m.*\|pre_rstn_.*_right_tvsensor_.*" -object_type port  -direction out]' >> $sub_upf.upf
+    echo 'set_level_shifter LS_UP_TOP_FR_SCP_DONT_LS -domain PD_MAIN  -elements $up_to_right_ports -no_shift' >> $sub_upf.upf
+
+    echo 'set scp_to_right_ports [find_objects scp_top_wrap_inst -regexp -pattern "reg_ddr\[5-9\]_scp_to_ddr_reg.*\|.*ddr\[5-9\].*from_btm\|ddr\[5-9\].*ready\|pre_rstn.*ddr\[5-9\].*\|pre_rstn.*right.*tvsensor.*\|.*up_to_right\|.*right_side_.*\|dft_test_clk_ddr_right_100m" -object_type port  -direction out]' >> $sub_upf.upf
+    echo 'set_level_shifter LS_UP_TOP_FR_SCP_DONT_LS -domain PD_SCP  -elements $scp_to_right_ports -no_shift' >> $sub_upf.upf
+    echo 'set ulk_to_scp_ports [find_objects noc_up_wrap_inst1 -regexp -pattern "ualink\[4-7\]_uart_tx_to_io_scp_glue\|ualink\[4-7\]_sue_led_activity_00_scp_glue\|ualink\[4-7\]_sue_led_link_00_scp_glue" -object_type port -direction out]' >> $sub_upf.upf
+    #echo 'set ulk_to_scp_ports "noc_up_wrap_inst1/ualink4_uart_tx_to_io_scp_glue noc_up_wrap_inst1/ualink5_uart_tx_to_io_scp_glue noc_up_wrap_inst1/ualink6_uart_tx_to_io_scp_glue noc_up_wrap_inst1/ualink7_uart_tx_to_io_scp_glue"' >> $sub_upf.upf
+    echo 'set_repeater LP_BUF_HIGH -domain PD_NOC_UP1 -elements $ulk_to_scp_ports -repeater_supply SS_MAIN' >> $sub_upf.upf
+
+
+  else if ($sub_upf == "bottom_top_wrap"  ) then
+
+    sed -i '/^\s*set .*GPC.*\"/,/^\s*\"/d' $sub_upf.upf  
+    sed -i '/^\s*set .*UALINK.*\"/,/^\s*\"/d' $sub_upf.upf
+    sed -i '/^\s*set .*DDR.*\"/,/^\s*\"/d' $sub_upf.upf  
+
+    sed -i "/PDOWN_GPC/Id" $sub_upf.upf
+    sed -i "/PDOWN_UALINK/Id" $sub_upf.upf
+
+    sed -i '/TVS/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    #sed -i '/VPU/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/UALINK/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/SCP/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    #sed -i '/PCIE/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    #sed -i '/RDMA/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/GPC/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/DDR/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/UALINK_CLK_BUF/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/LEFT/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/RIGHT/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+
+      
+
+    sed -i "s/[A-Za-z0-9_]*TVS[A-Za-z0-9_.]*//g" $sub_upf.upf
+    #sed -i "s/[A-Za-z0-9_]*VPU[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*UALINK[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*SCP[A-Za-z0-9_.]*//g" $sub_upf.upf
+    #sed -i "s/[A-Za-z0-9_]*PCIE[A-Za-z0-9_.]*//g" $sub_upf.upf
+    #sed -i "s/[A-Za-z0-9_]*RDMA[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*GPC[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*DDR[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*UALINK_CLK_BUF[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "/middle_matrix/Id" $sub_upf.upf
+    sed -i "/up_top/Id" $sub_upf.upf
+    #sed -i "/bottom/Id" $sub_upf.upf
+    sed -i '/^\s*$/d' $sub_upf.upf  
+
+
+    sed -i "s/u_bottom_top_wrap\///" $sub_upf.upf
+    sed -i "s/add_power_state\s*-supply/add_power_state /" $sub_upf.upf
+
+    echo "" >> $sub_upf.upf
+
+  else if ($sub_upf == "mid_top_wrap") then
+
+    #sed -i '/^\s*set .*GPC.*\"/,/^\s*\"/d' $sub_upf.upf  
+    sed -i '/^\s*set .*UALINK.*\"/,/^\s*\"/d' $sub_upf.upf
+    sed -i '/^\s*set .*DDR.*\"/,/^\s*\"/d' $sub_upf.upf  
+    sed -i '/^\s*set .*RDMA.*\"/,/^\s*\"/d' $sub_upf.upf
+    sed -i '/^\s*set .*PCIE.*\"/,/^\s*\"/d' $sub_upf.upf
+
+    sed -i "/PDOWN_UALINK/Id" $sub_upf.upf      
+    #sed -i "/PDOWN_GPC/Id" $sub_upf.upf
+    sed -i "/PDOWN_PCIE/Id" $sub_upf.upf    
+    sed -i "/PDOWN_RDMA/Id" $sub_upf.upf 
+
+    sed -i '/TVS/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/VPU/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/UALINK/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/SCP/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/PCIE/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/RDMA/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    #sed -i '/GPC/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/DDR/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/CLK_BUF/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/LEFT/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/RIGHT/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+
+
+    sed -i "s/[A-Za-z0-9_]*TVS[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*VPU[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*UALINK[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*SCP[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*PCIE[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*RDMA[A-Za-z0-9_.]*//g" $sub_upf.upf
+    #sed -i "s/[A-Za-z0-9_]*GPC[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*DDR[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*CLK_BUF[A-Za-z0-9_.]*//g" $sub_upf.upf
+    #sed -i "/middle_matrix/Id" $sub_upf.upf
+    sed -i "/up_top/Id" $sub_upf.upf
+    sed -i "/bottom/Id" $sub_upf.upf
+    sed -i '/^\s*$/d' $sub_upf.upf  
+
+
+    sed -i "s/u_mid_top_wrap\///" $sub_upf.upf
+    sed -i "s/add_power_state\s*-supply/add_power_state /" $sub_upf.upf
+
+  else if ($sub_upf == "left_top" ) then
+
+    sed -i '/^\s*set .*GPC.*\"/,/^\s*\"/d' $sub_upf.upf  
+    sed -i '/^\s*set .*UALINK.*\"/,/^\s*\"/d' $sub_upf.upf
+    sed -i '/^\s*set .*RIGHT_DDR.*\"/,/^\s*\"/d' $sub_upf.upf
+    sed -i '/^\s*set .*RDMA.*\"/,/^\s*\"/d' $sub_upf.upf
+    sed -i '/^\s*set .*PCIE.*\"/,/^\s*\"/d' $sub_upf.upf
+
+    sed -i "/PDOWN_UALINK/Id" $sub_upf.upf      
+    sed -i "/PDOWN_GPC/Id" $sub_upf.upf
+    sed -i "/PDOWN_PCIE/Id" $sub_upf.upf    
+    sed -i "/PDOWN_RDMA/Id" $sub_upf.upf 
+
+    sed -i '/TVS/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/VPU/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/UALINK/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/SCP/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/PCIE/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/RDMA/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/GPC/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    #sed -i '/DDR/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/DDR[5-9]/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/CLK_BUF/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    #sed -i '/LEFT/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/RIGHT/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+
+    sed -i "s/[A-Za-z0-9_]*TVS[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*VPU[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*UALINK[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*SCP[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*PCIE[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*RDMA[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*GPC[A-Za-z0-9_.]*//g" $sub_upf.upf
+    #sed -i "s/[A-Za-z0-9_]*DDR[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*DDR_RIGHT[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*RIGHT_DDR[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*CLK_BUF[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "/middle_matrix/Id" $sub_upf.upf
+    sed -i "/up_top/Id" $sub_upf.upf
+    sed -i "/bottom/Id" $sub_upf.upf
+    sed -i '/^\s*$/d' $sub_upf.upf  
+
+    sed -i "s/u_left_top\///" $sub_upf.upf
+    sed -i "/u_left_top/d" $sub_upf.upf    
+    sed -i "s/PD_LEFT /PD_MAIN /" $sub_upf.upf
+    sed -i "/set_level_shifter.*PD_LEFT_DDR .*-applies_to/d" $sub_upf.upf
+    sed -i "/map_level_shifter_cell.*PD_LEFT_DDR /d" $sub_upf.upf    
+    sed -i "s/add_power_state\s*-supply/add_power_state /" $sub_upf.upf
+
+  else if ($sub_upf == "right_top") then
+
+    sed -i '/^\s*set .*GPC.*\"/,/^\s*\"/d' $sub_upf.upf  
+    sed -i '/^\s*set .*UALINK.*\"/,/^\s*\"/d' $sub_upf.upf
+    sed -i '/^\s*set .*LEFT_DDR.*\"/,/^\s*\"/d' $sub_upf.upf
+    sed -i '/^\s*set .*RDMA.*\"/,/^\s*\"/d' $sub_upf.upf
+    sed -i '/^\s*set .*PCIE.*\"/,/^\s*\"/d' $sub_upf.upf
+
+    sed -i "/PDOWN_UALINK/Id" $sub_upf.upf      
+    sed -i "/PDOWN_GPC/Id" $sub_upf.upf
+    sed -i "/PDOWN_PCIE/Id" $sub_upf.upf    
+    sed -i "/PDOWN_RDMA/Id" $sub_upf.upf 
+
+    sed -i '/TVS/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/VPU/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/UALINK/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    #sed -i '/SCP/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/PCIE/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/RDMA/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/GPC/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    #sed -i '/DDR/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/DDR[0-4]/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/CLK_BUF/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    sed -i '/LEFT/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+    #sed -i '/RIGHT/I{/create_pst\|add_pst_state/\!d}' $sub_upf.upf
+
+    sed -i "s/[A-Za-z0-9_]*TVS[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*VPU[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*UALINK[A-Za-z0-9_.]*//g" $sub_upf.upf
+    #sed -i "s/[A-Za-z0-9_]*SCP[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*PCIE[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*RDMA[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*GPC[A-Za-z0-9_.]*//g" $sub_upf.upf
+    #sed -i "s/[A-Za-z0-9_]*DDR[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*DDR_LEFT[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*LEFT_DDR[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "s/[A-Za-z0-9_]*CLK_BUF[A-Za-z0-9_.]*//g" $sub_upf.upf
+    sed -i "/middle_matrix/Id" $sub_upf.upf
+    sed -i "/up_top/Id" $sub_upf.upf
+    sed -i "/NOC_UP/Id" $sub_upf.upf
+    sed -i "/NOCUP/Id" $sub_upf.upf
+    sed -i "/PD_SCP/Id" $sub_upf.upf
+    sed -i "/bottom/Id" $sub_upf.upf
+
+    sed -i '/^\s*$/d' $sub_upf.upf  
+
+
+    sed -i "s/u_right_top\///" $sub_upf.upf
+    sed -i "/u_right_top/d" $sub_upf.upf
+    sed -i "s/PD_RIGHT /PD_MAIN /" $sub_upf.upf
+    sed -i "/set_level_shifter.*PD_RIGHT_DDR .*-applies_to/d" $sub_upf.upf
+    sed -i "/map_level_shifter_cell.*PD_RIGHT_DDR /d" $sub_upf.upf
+    sed -i "s/add_power_state\s*-supply/add_power_state /" $sub_upf.upf
+
+    echo "" >> $sub_upf.upf
+    echo "set scp_to_right_ports_0 [find_objects . -pattern *from_noc_bottom* -object_type port -direction in]" >> $sub_upf.upf
+    echo "set scp_to_right_ports_1 [find_objects . -pattern *up_to_right -object_type port -direction in]" >> $sub_upf.upf
+    echo "set scp_to_right_ports_2 [find_objects . -pattern right_dft_test_* -object_type port -direction in]" >> $sub_upf.upf
+    echo "set scp_to_right_ports_3 [find_objects . -pattern *scp_to_ddr_reg* -object_type port -direction in]" >> $sub_upf.upf
+    echo 'set scp_to_right_ports "$scp_to_right_ports_0 $scp_to_right_ports_1 $scp_to_right_ports_2 $scp_to_right_ports_3"' >> $sub_upf.upf
+    echo 'set_related_supply_net -object_list $scp_to_right_ports -ground VSS -power VDD_SCP' >> $sub_upf.upf
+    echo 'set_repeater LP_BUF_HIGH -domain PD_MAIN -elements $scp_to_right_ports -repeater_supply SS_MAIN' >> $sub_upf.upf
+  endif
+endif
+end
+
+
